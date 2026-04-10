@@ -2,7 +2,7 @@
 
 # ⚡ CQRS + Event Sourcing Deep Dive
 
-**"CQRS는 Command와 Query를 나누는 것이다 — 와 — 쓰기 모델은 불변식을 보호하고, 읽기 모델은 조회 최적화를 위해 완전히 다른 스키마를 가지며, 이벤트가 두 모델의 동기화 수단이다의 차이를 만드는 레포"**
+**"이벤트가 두 모델의 동기화 수단이 되는 순간, CQRS는 패턴이 아닌 아키텍처가 된다"**
 
 <br/>
 
@@ -223,13 +223,14 @@ services:
       - "8024:8024"   # Dashboard UI
       - "8124:8124"   # gRPC (Command / Event / Query 라우팅)
 
+  # 실제 서비스 구현 시 build 경로를 프로젝트에 맞게 설정하세요
   command-service:
     build: ./command-service
     ports:
       - "8081:8080"
     environment:
       AXON_AXONSERVER_SERVERS: axon-server:8124
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/command_db
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cqrs_db
 
   query-service:
     build: ./query-service
@@ -237,7 +238,7 @@ services:
       - "8082:8080"
     environment:
       AXON_AXONSERVER_SERVERS: axon-server:8124
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/read_db
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cqrs_db
       SPRING_REDIS_HOST: redis
 
   kafka:
@@ -248,6 +249,10 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -260,6 +265,7 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_DB: cqrs_db
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
 
   redis:
@@ -271,17 +277,21 @@ services:
 ```sql
 -- 이벤트 스토어 스키마 (PostgreSQL 직접 구현 시)
 CREATE TABLE event_store (
-  id          BIGSERIAL    PRIMARY KEY,
-  stream_id   VARCHAR(255) NOT NULL,          -- Aggregate ID
-  version     BIGINT       NOT NULL,          -- 낙관적 잠금 버전
-  event_type  VARCHAR(255) NOT NULL,          -- 이벤트 타입 (FQCN)
-  payload     JSONB        NOT NULL,          -- 이벤트 데이터
-  metadata    JSONB,                          -- 상관관계 ID, 원인 ID 등
+  global_seq  BIGSERIAL    PRIMARY KEY,            -- 전역 순번 (Projection 폴링 기준)
+  stream_id   VARCHAR(255) NOT NULL,               -- Aggregate ID (예: "account-ACC-001")
+  version     BIGINT       NOT NULL,               -- 스트림 내 순번 (낙관적 잠금 버전)
+  event_type  VARCHAR(255) NOT NULL,               -- 이벤트 타입
+  payload     JSONB        NOT NULL,               -- 이벤트 데이터
+  metadata    JSONB,                               -- 상관관계 ID, 원인 ID 등
   occurred_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-  UNIQUE (stream_id, version)                 -- 낙관적 잠금 보장
+  UNIQUE (stream_id, version)                      -- 낙관적 잠금 보장
 );
 
+-- Aggregate 로드: 특정 스트림의 이벤트를 version 순으로 읽기
 CREATE INDEX idx_event_store_stream ON event_store (stream_id, version);
+
+-- Projection 폴링: 마지막으로 처리한 global_seq 이후 이벤트를 순서대로 로드
+CREATE INDEX idx_event_store_seq ON event_store (global_seq);
 ```
 
 ---
@@ -422,6 +432,6 @@ Made with ❤️ by [Dev Book Lab](https://github.com/dev-book-lab)
 
 <br/>
 
-*"CQRS는 Command와 Query를 나누는 것이다 — 와 — 이벤트가 두 모델의 동기화 수단이다의 차이를 만드는 레포"*
+*"읽기와 쓰기를 나누는 것과, 왜 이벤트가 진실의 원천이 되어야 하는지 — 그리고 그것이 시스템 전체 설계를 어떻게 바꾸는지 아는 것은 다르다"*
 
 </div>
